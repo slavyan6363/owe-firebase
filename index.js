@@ -9,6 +9,11 @@ const ignoreNotFoundUserIds = true;
 
 const phoneNotFoundErrorCode = 400;
 
+const OWE_STATUS_REQUESTED = 'requested'
+const OWE_STATUS_ACTIVE = 'active'
+const OWE_STATUS_CLOSED = 'closed'
+const OWE_STATUS_CANCELLED = 'cancelled'
+const OWE_STATUS_REQUESTED_CLOSE = 'requested_close'
 
 const functions = require('firebase-functions');
 
@@ -108,21 +113,37 @@ app.get('/addOwe', (req, res) => {
   const sum = req.query.sum;
   const descr = req.query.descr;
   var counter = 0;
-
   
-
+  //function to wait async completion of finding two UIDs of users by their phone numbers
   var sendResIfBothFound = function() {
     ++counter;
     if(counter == 2) {
+      // we are not allowing to create an OWE between two users if no one of them is you
       if (who !== req.user.uid && to !== req.user.uid) {
         console.log(req.user.uid + " req for " + who + " " + to)
         res.sendStatus(403);
         return;
       }
 
-      var oweKey = admin.database().ref('/owes').push({who: who, to: to, sum: sum, descr: descr}).key;
+      //if requster is the debtor then we don't need any confirmations by the creditor
+      var status = who == req.user.uid ? OWE_STATUS_ACTIVE : OWE_STATUS_REQUESTED;
+
+      //push new OWE object and get it's db key
+      var oweKey = admin.database().ref('/owes').push({
+      	who: who, 
+      	to: to, 
+      	sum: sum, 
+      	descr: descr,
+      	status: status,
+      	created: Date.now(),
+      	closed: 0
+      }).key;
+
+      //add oweKey to users who should know about this OWE
       admin.database().ref(`/users/${who}/owes/${oweKey}`).set(true)
       admin.database().ref(`/users/${to}/owes/${oweKey}`).set(true)
+
+      //return new OWE key with status SUCCESS
       res.status(200).send({ 
         result: 'Successfully added new OWE object, see \'oweId\' field for it\'s id.', 
         oweId: oweKey 
@@ -153,6 +174,7 @@ app.get('/addOwe', (req, res) => {
   }
 
   admin.database().ref('/users').orderByChild('phone').equalTo(who).once("value", function(snapshot) {
+  	//found object is here just to pass it to function isBadPhone by reference
     var found = { id : who };
     if (!isBadPhone(snapshot, found)) {
       who = found.id
@@ -160,6 +182,7 @@ app.get('/addOwe', (req, res) => {
     }
   });
   admin.database().ref('/users').orderByChild('phone').equalTo(to).once("value", function(snapshot) {
+  	//found object is here just to pass it to function isBadPhone by reference
     var found = { id : to };
     if (!isBadPhone(snapshot, found)) {
       to = found.id
@@ -357,11 +380,23 @@ app.get('/deleteOwe', (req, res) => {
             }
         })
       } else {
-        admin.database().ref(`/users/${who}/owesArchived/${id}/`).set("true")
-        admin.database().ref(`/users/${to}/owesArchived/${id}/`).set("true")
-        admin.database().ref(`/users/${who}/owes/${id}/`).remove()
-        admin.database().ref(`/users/${to}/owes/${id}/`).remove()
+        //admin.database().ref(`/users/${who}/owesArchived/${id}/`).set("true")
+        //admin.database().ref(`/users/${to}/owesArchived/${id}/`).set("true")
+        //admin.database().ref(`/users/${who}/owes/${id}/`).remove()
+        //admin.database().ref(`/users/${to}/owes/${id}/`).remove()
 
+        //if requster is the creditor then we don't need any confirmations by the creditor
+      	var status = to == req.user.uid ? OWE_STATUS_CLOSED : OWE_STATUS_REQUESTED_CLOSE;
+
+        admin.database().ref(`/owes/${id}/status`).set(status);
+
+        if (status == OWE_STATUS_CLOSED) {
+        	admin.database().ref(`/owes/${id}/closed`).set(Date.now());
+        }
+        if (status == OWE_STATUS_REQUESTED_CLOSE) {
+        	admin.database().ref(`/owes/${id}/requested_close`).set(Date.now());
+        }
+        
         res.status(200).send({})
       }
     }

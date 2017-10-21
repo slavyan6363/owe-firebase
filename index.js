@@ -105,7 +105,29 @@ app.get('/hello', (req, res) => {
 //   });
 // });
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 app.get('/addOwe', (req, res) => {
+  console.log('addOwe');
+  
   // phone number
   var who = phoneNumberToDigits(req.query.who);
   // phone number
@@ -129,7 +151,7 @@ app.get('/addOwe', (req, res) => {
       var status = who == req.user.uid ? OWE_STATUS_ACTIVE : OWE_STATUS_REQUESTED;
 
       //push new OWE object and get it's db key
-      var oweKey = admin.database().ref('/owes').push({
+      var oweKey = admin.database().ref(`/owes`).push({
       	who: who, 
       	to: to, 
       	sum: sum, 
@@ -140,8 +162,8 @@ app.get('/addOwe', (req, res) => {
       }).key;
 
       //add oweKey to users who should know about this OWE
-      admin.database().ref(`/users/${who}/owes/${oweKey}`).set(true)
-      admin.database().ref(`/users/${to}/owes/${oweKey}`).set(true)
+      admin.database().ref(`/users/${who}/owes/${status}/${oweKey}`).set(true)
+      admin.database().ref(`/users/${to}/owes/${status}/${oweKey}`).set(true)
 
       //return new OWE key with status SUCCESS
       res.status(200).send({ 
@@ -192,11 +214,23 @@ app.get('/addOwe', (req, res) => {
 });
 
 
+
+
+
+
+
+
+
+
 app.get('/getOwes', (req, res) => {
+  console.log('getOwes');
+
+
   // uid from provided auth token
   var who = req.user.uid;
+  var status = req.query.status;
 
-  admin.database().ref(`/users/${who}/owes/`).once("value", function(snapshot) {
+  admin.database().ref(`/users/${who}/owes/${status}`).once("value", function(snapshot) {
     const val = snapshot.val();
 
     if (val == null) {
@@ -298,7 +332,16 @@ app.get('/getOwes', (req, res) => {
   });
 });
 
+
+
+
+
+
+
+
+
 app.get('/setPhone', (req, res) => {
+  console.log('setPhone');
   // uid
   const who = req.user.uid;
   const phone = phoneNumberToDigits(req.query.phone);
@@ -336,8 +379,19 @@ app.get('/setPhone', (req, res) => {
   });
 });
 
-app.get('/deleteOwe', (req, res) => {
+
+
+
+
+
+
+
+
+app.get('/changeOwe', (req, res) => {
+  console.log('changeOwe');
+
   const id = req.query.id;
+  const action = req.query.action;
 
   if (id == null) {
     res.status(400).send({
@@ -375,33 +429,41 @@ app.get('/deleteOwe', (req, res) => {
         res.status(403).send({
           error : { 
               code : 403,
-              message : `You have to be a participant in an owe you want to delete.'`,
+              message : `You have to be a participant in an owe you want to modify.'`,
               oweId : id
             }
         })
       } else {
-        //admin.database().ref(`/users/${who}/owesArchived/${id}/`).set("true")
-        //admin.database().ref(`/users/${to}/owesArchived/${id}/`).set("true")
-        //admin.database().ref(`/users/${who}/owes/${id}/`).remove()
-        //admin.database().ref(`/users/${to}/owes/${id}/`).remove()
+	    var statusOld = val.status;
 
-        //if requster is the creditor then we don't need any confirmations by the creditor
-      	var status = to == req.user.uid ? OWE_STATUS_CLOSED : OWE_STATUS_REQUESTED_CLOSE;
+	    if ((action == "close" && to == req.user.uid) || (action == "confirm" && who == req.user.uid)) {
+	    	var status = action == "close" ? OWE_STATUS_CLOSED : OWE_STATUS_ACTIVE;
 
-        admin.database().ref(`/owes/${id}/status`).set(status);
+	        admin.database().ref(`/users/${who}/owes/${statusOld}/${id}/`).remove()
+	        admin.database().ref(`/users/${to}/owes/${statusOld}/${id}/`).remove()
+	        admin.database().ref(`/users/${who}/owes/${status}/${id}/`).set(true)
+	        admin.database().ref(`/users/${to}/owes/${status}/${id}/`).set(true)
 
-        if (status == OWE_STATUS_CLOSED) {
-        	admin.database().ref(`/owes/${id}/closed`).set(Date.now());
-        }
-        if (status == OWE_STATUS_REQUESTED_CLOSE) {
-        	admin.database().ref(`/owes/${id}/requested_close`).set(Date.now());
-        }
-        
+	        admin.database().ref(`/owes/${id}/status`).set(status);
+
+	        if (action == "close") {
+	        	admin.database().ref(`/owes/${id}/closed`).set(Date.now());
+	        }
+	    }
+
         res.status(200).send({})
       }
     }
   });
 });
+
+
+
+
+
+
+
+
 
 // This HTTPS endpoint can only be accessed by your Firebase Users.
 // Requests need to be authorized by providing an `Authorization` HTTP header

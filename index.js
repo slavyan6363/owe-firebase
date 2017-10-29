@@ -113,7 +113,20 @@ app.get('/hello', (req, res) => {
 
 
 
+var changeOweStatusUnsafe = function(oweObject, newStatus) {
+  console.log(`Changing OWE ${oweObject.id} status from ${oweObject.status} to ${newStatus}`)
 
+  admin.database().ref(`/users/${oweObject.who}/owes/${oweObject.status}/${oweObject.id}/`).remove()
+  admin.database().ref(`/users/${oweObject.to}/owes/${oweObject.status}/${oweObject.id}/`).remove()
+  admin.database().ref(`/users/${oweObject.who}/owes/${newStatus}/${oweObject.id}/`).set(true)
+  admin.database().ref(`/users/${oweObject.to}/owes/${newStatus}/${oweObject.id}/`).set(true)
+
+  admin.database().ref(`/owes/${oweObject.id}/status`).set(newStatus);
+
+  if (newStatus == OWE_STATUS_CLOSED) {
+    admin.database().ref(`/owes/${oweObject.id}/closed`).set(Date.now());
+  }
+}
 
 
 
@@ -420,6 +433,7 @@ app.get('/changeOwe', (req, res) => {
         }
       }
     } else {
+      val.id = id;
       // uid
       var who = val.who
       // uid
@@ -436,19 +450,14 @@ app.get('/changeOwe', (req, res) => {
       } else {
 	    var statusOld = val.status;
 
+      if((action == "cancel" && who == req.user.uid)) {
+          changeOweStatusUnsafe(val, OWE_STATUS_CANCELLED)
+      }
+
 	    if ((action == "close" && to == req.user.uid) || (action == "confirm" && who == req.user.uid)) {
-	    	var status = action == "close" ? OWE_STATUS_CLOSED : OWE_STATUS_ACTIVE;
+	    	  var status = action == "close" ? OWE_STATUS_CLOSED : OWE_STATUS_ACTIVE
 
-	        admin.database().ref(`/users/${who}/owes/${statusOld}/${id}/`).remove()
-	        admin.database().ref(`/users/${to}/owes/${statusOld}/${id}/`).remove()
-	        admin.database().ref(`/users/${who}/owes/${status}/${id}/`).set(true)
-	        admin.database().ref(`/users/${to}/owes/${status}/${id}/`).set(true)
-
-	        admin.database().ref(`/owes/${id}/status`).set(status);
-
-	        if (action == "close") {
-	        	admin.database().ref(`/owes/${id}/closed`).set(Date.now());
-	        }
+	        changeOweStatusUnsafe(val, status)
 	    }
 
         res.status(200).send({})

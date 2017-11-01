@@ -16,7 +16,7 @@ const OWE_STATUS_CANCELLED = 'cancelled'
 const OWE_STATUS_REQUESTED_CLOSE = 'requested_close'
 
 //Create ACTIVE owes without confirmation of debtor
-const DEBUG_CREATE_ONLY_ACTIVE_OWES = true;
+const DEBUG_CREATE_ONLY_ACTIVE_OWES = false;
 
 
 

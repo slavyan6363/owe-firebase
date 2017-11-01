@@ -230,22 +230,24 @@ var checkForOwePairs = function(who, to) {
           console.log(`${o2.sum} - ${o1.sum} = ${newSum}`);
         }
 
-        var newOwe = {
-          who: maxOwe.who, 
-          to: maxOwe.to, 
-          sum: `${newSum}`, 
-          descr: "Accumulated",
-          status: OWE_STATUS_ACTIVE,
-          created: Date.now(),
-          closed: 0
-        };
+        if (o1.sum != o2.sum) {
+          var newOwe = {
+            who: maxOwe.who, 
+            to: maxOwe.to, 
+            sum: `${newSum}`, 
+            descr: "Accumulated",
+            status: OWE_STATUS_ACTIVE,
+            created: Date.now(),
+            closed: 0
+          };
 
-        newOwe.id = createOwe(newOwe);
+          newOwe.id = createOwe(newOwe);
 
-        if (newOwe.who == firstUid) {
-          arr1.push(newOwe);
-        } else {
-          arr2.push(newOwe);
+          if (newOwe.who == firstUid) {
+            arr1.push(newOwe);
+          } else {
+            arr2.push(newOwe);
+          }
         }
       }
     }

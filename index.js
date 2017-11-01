@@ -15,6 +15,14 @@ const OWE_STATUS_CLOSED = 'closed'
 const OWE_STATUS_CANCELLED = 'cancelled'
 const OWE_STATUS_REQUESTED_CLOSE = 'requested_close'
 
+//Create ACTIVE owes without confirmation of debtor
+const DEBUG_CREATE_ONLY_ACTIVE_OWES = true;
+
+
+
+
+
+
 const functions = require('firebase-functions');
 
 // // Create and Deploy Your First Cloud Functions
@@ -110,8 +118,45 @@ app.get('/hello', (req, res) => {
 
 
 
+//var completion = function(oweObject, error) { }
+//oweObject = {} in case of an error
+//error = null - json object, ready to send as response
+//
+//use requesterUid "ANY" to pass security check
+var getOweObjectWithUsersUids = function(id, requesterUid, completion) {
+  admin.database().ref(`/owes/${id}/`).once("value", function(snapshot) {
+    const owe = snapshot.val();
+
+    if (owe == null) {
+      if (ignoreNotFoundOweIds) {
+        completion({}, null);
+      } else {
+        completion({}, {
+          error : { 
+            code : oweNotFoundCode,
+            message : `Owe with the id '${id}' not found.`,
+            id : id
+          }
+        });
+      }
+    } else {
+      if (owe.to != requesterUid && owe.who != requesterUid && requesterUid != "ANY") {
+        completion({}, {
+          error : { 
+              code : 403,
+              message : `You have to be a participant in an owe you want to modify.'`,
+              id : id
+            }
+        })
+      } else {
+        owe.id = id;
+        completion(owe, null);
+      }
+    }
+  });
 
 
+}
 
 var changeOweStatusUnsafe = function(oweObject, newStatus) {
   console.log(`Changing OWE ${oweObject.id} status from ${oweObject.status} to ${newStatus}`)
@@ -128,12 +173,221 @@ var changeOweStatusUnsafe = function(oweObject, newStatus) {
   }
 }
 
+var checkForOwePairs = function(who, to) {
+  var counter = 0;
+  var owesWho = [];
+  var owesTo = [];
 
+  getOwesOfUser(who, OWE_STATUS_ACTIVE, function(owesArray, error) { 
+    if(error != null) {
+      res.status(error.error.code).send(error);
+    } else {
+      var arr1 = [];
+      var arr2 = [];
+      var firstUid = null;
+    
+      owesArray.forEach(function(owe) {
+        if (firstUid == null) {
+          firstUid = owe.who;
+        }
 
+        if (owe.who == firstUid) {
+          arr1.push(owe);
+        } else {
+          arr2.push(owe);
+        }
+      });
 
+      console.log("FOUND OWE PAIRS");
+      console.log(arr1);
+      console.log(arr2);
+      console.log("///FOUND OWE PAIRS");
 
+      while (arr1.length > 0 && arr2.length > 0) {
+        var o1 = arr1[0];
+        var o2 = arr2[0];
+        arr1.splice(0, 1);
+        arr2.splice(0, 1);
 
+        changeOweStatusUnsafe(o1, OWE_STATUS_CLOSED);
+        changeOweStatusUnsafe(o2, OWE_STATUS_CLOSED);
 
+        var newSum = null;
+        var maxOwe = null;
+
+        o1.sum = parseInt(o1.sum);
+        o2.sum = parseInt(o2.sum);
+
+        if (o1.sum == o2.sum) {
+          //do nothing
+        } else if (o1.sum > o2.sum) {
+          newSum = o1.sum - o2.sum;
+          maxOwe = o1;
+          console.log(`${o1.sum} - ${o2.sum} = ${newSum}`);
+        } else {
+          newSum = o2.sum - o1.sum;
+          maxOwe = o2;
+          console.log(`${o2.sum} - ${o1.sum} = ${newSum}`);
+        }
+
+        var newOwe = {
+          who: maxOwe.who, 
+          to: maxOwe.to, 
+          sum: `${newSum}`, 
+          descr: "Accumulated",
+          status: OWE_STATUS_ACTIVE,
+          created: Date.now(),
+          closed: 0
+        };
+
+        newOwe.id = createOwe(newOwe);
+
+        if (newOwe.who == firstUid) {
+          arr1.push(newOwe);
+        } else {
+          arr2.push(newOwe);
+        }
+      }
+    }
+  }, to);
+}
+
+//var completion = function(owesArray, error) { }
+//owesArray = [] in case of an error
+//error = null - json object, ready to send as response
+var getOwesOfUser = function(who, status, completion, onlyIncludingUid) {
+  admin.database().ref(`/users/${who}/owes/${status}`).once("value", function(snapshot) {
+    const oweIdsList = snapshot.val();
+
+    if (oweIdsList == null) {
+      completion([], null)
+    } else {
+      var idsArray = Object.keys(oweIdsList);
+      var owesToGet = idsArray.length;
+      var resArr = [];
+
+      var onOweAdded = function() {
+        --owesToGet;
+        if (owesToGet == 0) {
+          completion(resArr, null);
+        }
+      }
+
+      idsArray.forEach(function(id) {
+        admin.database().ref(`/owes/${id}/`).once("value", function(snapshot2) {
+          const owe = snapshot2.val();
+
+          if (owe == null) {
+            if (ignoreNotFoundOweIds) {
+              onOweAdded()
+            } else {
+              completion([], {
+                error : { 
+                  code : oweNotFoundCode,
+                  message : `Owe with the id '${id}' not found.`,
+                  oweId : id
+                }
+              });
+            }
+          } else {
+            owe.id = id;
+
+            if (typeof onlyIncludingUid != 'undefined') { 
+              if (owe.who == onlyIncludingUid || owe.to == onlyIncludingUid) {
+                resArr.push(owe);
+              }
+            } else {
+              resArr.push(owe);
+            }
+
+            onOweAdded();
+          }
+        });
+      });
+    }
+  });
+}
+
+//var completion = function(owesWithPhones, error) { }
+//owesArray = [] in case of an error
+//error = null - json object, ready to send as response
+var replaceUidsWithPhonesInOwesArray = function(owes, completion) {
+  var resultArray = []
+  var counter = owes.length * 2;
+
+  var onReplace = function() {
+    --counter;
+    if(counter == 0) {
+      completion(owes, null);
+    }
+  }
+
+  owes.forEach(function(owe) {
+    getPhoneForUid(owe.who, function(phone) { owe.who = phone; onReplace(); });
+    getPhoneForUid(owe.to, function(phone) { owe.to = phone; onReplace(); });
+  });
+}
+
+//var completion = function(phone) { }
+//phone will be equal to uid if phone was not found
+var getPhoneForUid = function(who, completion) {
+  admin.database().ref(`/users/${who}/`).once("value", function(snapshot) {
+    const user = snapshot.val();
+
+    if (user == null) {
+      //userNotFound(who)
+      completion(who);
+    } else {
+      completion(user.phone);
+    }
+  });
+}
+
+/*var userNotFound = function(invalidId) {
+  if (ignoreNotFoundUserIds) {
+    onOweAdded();
+  } else {
+    completion([], {
+      error : { 
+        code : userIdNotFoundCode,
+        message : `User with the id '${invalidId}' in the specified OWE not found.`,
+        userId : invalidId,
+        owe : owe
+      }
+    });
+  }
+}*/
+
+/*
+oweObject:
+{
+  who: who, 
+  to: to, 
+  sum: sum, 
+  descr: descr,
+  status: status,
+  created: Date.now(),
+  closed: 0
+}
+*/
+var createOwe = function(oweObject) {
+  //push new OWE object and get it's db key
+  var oweKey = admin.database().ref(`/owes`).push(oweObject).key;
+
+  //add oweKey to users who should know about this OWE
+  admin.database().ref(`/users/${oweObject.who}/owes/${oweObject.status}/${oweKey}`).set(true)
+  admin.database().ref(`/users/${oweObject.to}/owes/${oweObject.status}/${oweKey}`).set(true)
+
+  return oweKey;
+}
+
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
 
 
 
@@ -154,7 +408,7 @@ app.get('/addOwe', (req, res) => {
     ++counter;
     if(counter == 2) {
       // we are not allowing to create an OWE between two users if no one of them is you
-      if (who !== req.user.uid && to !== req.user.uid) {
+      if (who != req.user.uid && to != req.user.uid) {
         console.log(req.user.uid + " req for " + who + " " + to)
         res.sendStatus(403);
         return;
@@ -162,27 +416,29 @@ app.get('/addOwe', (req, res) => {
 
       //if requster is the debtor then we don't need any confirmations by the creditor
       var status = who == req.user.uid ? OWE_STATUS_ACTIVE : OWE_STATUS_REQUESTED;
+      if (DEBUG_CREATE_ONLY_ACTIVE_OWES) {
+        status = OWE_STATUS_ACTIVE;
+      }
 
-      //push new OWE object and get it's db key
-      var oweKey = admin.database().ref(`/owes`).push({
-      	who: who, 
-      	to: to, 
-      	sum: sum, 
-      	descr: descr,
-      	status: status,
-      	created: Date.now(),
-      	closed: 0
-      }).key;
-
-      //add oweKey to users who should know about this OWE
-      admin.database().ref(`/users/${who}/owes/${status}/${oweKey}`).set(true)
-      admin.database().ref(`/users/${to}/owes/${status}/${oweKey}`).set(true)
+      var oweKey = createOwe({
+        who: who, 
+        to: to, 
+        sum: sum, 
+        descr: descr,
+        status: status,
+        created: Date.now(),
+        closed: 0
+      });
 
       //return new OWE key with status SUCCESS
       res.status(200).send({ 
         result: 'Successfully added new OWE object, see \'oweId\' field for it\'s id.', 
         oweId: oweKey 
       });
+
+      if (status == OWE_STATUS_ACTIVE) {
+        checkForOwePairs(who, to);
+      }
     }
   }
 
@@ -243,106 +499,15 @@ app.get('/getOwes', (req, res) => {
   var who = req.user.uid;
   var status = req.query.status;
 
-  admin.database().ref(`/users/${who}/owes/${status}`).once("value", function(snapshot) {
-    const val = snapshot.val();
-
-    if (val == null) {
-      res.send([]);
+  getOwesOfUser(who, status, function(owesArray, error) { 
+    if (error != null) {
+      res.status(error.error.code).send(error);
     } else {
-      var arr = Object.keys(val);
-      var resArr = [];
-
-      var owesToGet = arr.length;
-
-      var sendResFormatted = function() {
-        --owesToGet;
-        if (owesToGet == 0) {
-          if (!res.headerSent) {
-            res.status(200).send(resArr);
-          }
-        }
-      }
-
-      arr.forEach(function(id) {
-        admin.database().ref(`/owes/${id}/`).once("value", function(snapshot2) {
-          const val2 = snapshot2.val();
-
-          if (val2 == null) {
-            if (ignoreNotFoundOweIds) {
-              sendResFormatted()
-            } else {
-              if (!res.headerSent) {
-                res.status(oweNotFoundCode).send({
-                  error : { 
-                    code : oweNotFoundCode,
-                    message : `Owe with the id '${id}' not found.`,
-                    oweId : id
-                  }
-                });
-              }
-            }
-          } else {
-            var who = val2.who;
-            var to = val2.to;
-
-            var userNotFound = function(invalidId) {
-
-              if (ignoreNotFoundUserIds) {
-                sendResFormatted();
-              } else {
-                if (!res.headerSent) {
-                  res.status(userIdNotFoundCode).send({
-                    error : { 
-                      code : userIdNotFoundCode,
-                      message : `User with the id '${invalidId}' in the specified OWE not found.`,
-                      userId : invalidId,
-                      owe : val2
-                    }
-                  });
-                }
-              }
-            }
-
-            var counter = 0;
-            var setOweIfBothFound = function() {
-              ++counter;
-
-              if(counter == 2) {
-                val2.id = id;
-                val2.who = who;
-                val2.to = to;
-                resArr.push(val2);
-                sendResFormatted();
-              }
-            }
-
-            //get phone numbers, replace ids with it, set result to arr
-            admin.database().ref(`/users/${who}/`).once("value", function(snapshot3) {
-              const val3 = snapshot3.val();
-
-              if (val3 == null) {
-                userNotFound(who)
-              } else {
-                who = val3.phone;
-                setOweIfBothFound();
-              }
-            });
-
-            admin.database().ref(`/users/${to}/`).once("value", function(snapshot3) {
-              const val3 = snapshot3.val();
-
-              if (val3 == null) {
-                userNotFound(to)
-              } else {
-                to = val3.phone;
-                setOweIfBothFound();
-              }
-            });
-          }
-        });
+      replaceUidsWithPhonesInOwesArray(owesArray, function(owesWithPhones, error){
+        res.status(200).send(owesWithPhones);
       });
     }
-  });
+  })
 });
 
 
@@ -415,55 +580,27 @@ app.get('/changeOwe', (req, res) => {
     })
   }
 
-  admin.database().ref(`/owes/${id}/`).once("value", function(snapshot) {
-    const val = snapshot.val();
-
-    if (val == null) {
-      if (ignoreNotFoundOweIds) {
-        res.status(200).send({})
-      } else {
-        if (!res.headerSent) {
-          res.status(oweNotFoundCode).send({
-            error : { 
-              code : oweNotFoundCode,
-              message : `Owe with the id '${id}' not found.`,
-              oweId : id
-            }
-          });
-        }
-      }
+  getOweObjectWithUsersUids(id, req.user.uid, function(oweObject, error){
+    if (error != null) {
+      console.log(`ERROR /changeOwe ${error}`);
+      res.status(error.error.code).send(error);
     } else {
-      val.id = id;
-      // uid
-      var who = val.who
-      // uid
-      var to = val.to;
+      console.log("Change owe OK");
+      var statusOld = oweObject.status;
 
-      if (to !== req.user.uid && who !== req.user.uid) {
-        res.status(403).send({
-          error : { 
-              code : 403,
-              message : `You have to be a participant in an owe you want to modify.'`,
-              oweId : id
-            }
-        })
-      } else {
-	    var statusOld = val.status;
-
-      if((action == "cancel" && who == req.user.uid)) {
-          changeOweStatusUnsafe(val, OWE_STATUS_CANCELLED)
+      if((action == "cancel" && oweObject.who == req.user.uid)) {
+          changeOweStatusUnsafe(oweObject, OWE_STATUS_CANCELLED)
       }
 
-	    if ((action == "close" && to == req.user.uid) || (action == "confirm" && who == req.user.uid)) {
-	    	  var status = action == "close" ? OWE_STATUS_CLOSED : OWE_STATUS_ACTIVE
-
-	        changeOweStatusUnsafe(val, status)
-	    }
-
-        res.status(200).send({})
+      if ((action == "close" && oweObject.to == req.user.uid) || (action == "confirm" && oweObject.who == req.user.uid)) {
+          var status = action == "close" ? OWE_STATUS_CLOSED : OWE_STATUS_ACTIVE
+          changeOweStatusUnsafe(oweObject, status)
       }
+
+      res.status(200).send({})
     }
-  });
+  })
+
 });
 
 

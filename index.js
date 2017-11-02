@@ -8,6 +8,7 @@ const userIdNotFoundCode = 500;
 const ignoreNotFoundUserIds = true;
 
 const phoneNotFoundErrorCode = 400;
+const phoneNumberIsAlreadyClaimed = 403;
 
 const OWE_STATUS_REQUESTED = 'requested'
 const OWE_STATUS_ACTIVE = 'active'
@@ -331,14 +332,14 @@ var replaceUidsWithPhonesInOwesArray = function(owes, completion) {
 }
 
 //var completion = function(phone) { }
-//phone will be equal to uid if phone was not found
+//phone will be "undefinedPhone" if phone was not found
 var getPhoneForUid = function(who, completion) {
   admin.database().ref(`/users/${who}/`).once("value", function(snapshot) {
     const user = snapshot.val();
 
-    if (user == null) {
+    if (user == null || user.phone == null) {
       //userNotFound(who)
-      completion(who);
+      completion("undefinedPhone");
     } else {
       completion(user.phone);
     }
@@ -383,6 +384,55 @@ var createOwe = function(oweObject) {
   return oweKey;
 }
 
+//var completion = function(owner, error) { }
+//phone is string or null (if error is not null)
+//error is either null (success) or is { error : { code:int, message:string } }
+var getPhoneOwner = function(phone, completion) {
+  admin.database().ref(`/phoneOwners/${phone}`).once("value", function(snapshot) {
+    var phoneContainer = snapshot.val();
+    if (phoneContainer == null || phoneContainer.user == null) {
+      completion(null, {
+        error : {
+          code : phoneNotFoundErrorCode,
+          message : "Phone not found"
+        }
+      });
+    } else {
+      completion(phoneContainer.user, null);
+    }
+  });
+}
+
+//var completion = function(error) { }
+//error is either null (success) or is { error : { code:int, message:string } }
+var setPhoneOwner = function(phone, newOwner, completion) {
+  getPhoneOwner(phone, function(owner, error) {
+    if(owner == null || owner == newOwner) {
+      getPhoneForUid(newOwner, function(oldPhone) {
+        if (oldPhone == "undefinedPhone") {
+
+        } else {
+          //declaim old phone
+          admin.database().ref(`/phoneOwners/${oldPhone}`).remove();
+        }
+
+        //claim new
+        admin.database().ref(`/phoneOwners/${phone}/user`).set(newOwner);
+        admin.database().ref(`/users/${newOwner}/phone`).set(phone);
+        completion(null);
+      });
+    } else {
+      completion({
+        error : { 
+          code : phoneNumberIsAlreadyClaimed,
+          message : `Somebody else has already claimed that phone number.`,
+          phone : phone
+        }
+      });
+    }
+  });
+}
+
 /////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////
@@ -406,7 +456,7 @@ app.get('/addOwe', (req, res) => {
   var counter = 0;
   
   //function to wait async completion of finding two UIDs of users by their phone numbers
-  var sendResIfBothFound = function() {
+  var onUidFound = function() {
     ++counter;
     if(counter == 2) {
       // we are not allowing to create an OWE between two users if no one of them is you
@@ -444,43 +494,28 @@ app.get('/addOwe', (req, res) => {
     }
   }
 
-  // IF NOTHING FOUND     snapshot.val()    WILL BE    null
-  var isBadPhone = function(snapshot, found) {
-    const val = snapshot.val();
-
-    if (val == null) {
+  var sendError = function(error) {
+    if (error != null) {
       if (!res.headerSent) {
-        res.status(phoneNotFoundErrorCode).send({ 
-          error : { 
-            code : phoneNotFoundErrorCode,
-            message : `User with specified number '${found.id}' is not registered.`,
-            number : found.id
-          }
-        });
+        res.status(error.error.code).send(error);
       }
+      return true;
     }
-    else {
-      found.id = Object.keys(val)[0]
-    }
-
-    return (val == null)
+    return false;
   }
 
-  admin.database().ref('/users').orderByChild('phone').equalTo(who).once("value", function(snapshot) {
-  	//found object is here just to pass it to function isBadPhone by reference
-    var found = { id : who };
-    if (!isBadPhone(snapshot, found)) {
-      who = found.id
-      sendResIfBothFound()
+  getPhoneOwner(who, function(owner, error){
+    if (!sendError(error)) {
+      who = owner;
     }
+    onUidFound();
   });
-  admin.database().ref('/users').orderByChild('phone').equalTo(to).once("value", function(snapshot) {
-  	//found object is here just to pass it to function isBadPhone by reference
-    var found = { id : to };
-    if (!isBadPhone(snapshot, found)) {
-      to = found.id
-      sendResIfBothFound()
+
+  getPhoneOwner(to, function(owner, error){
+    if (!sendError(error)) {
+      to = owner;
     }
+    onUidFound();
   });
 });
 
@@ -532,29 +567,18 @@ app.get('/setPhone', (req, res) => {
           code : 400,
           message : `Can't set empty phone number.`
         }
-      });
+    });
     return;
   }
 
-  //set phone to my id if nobody has already claimed it
-  admin.database().ref('/users').orderByChild('phone').equalTo(phone).once("value", function(snapshot) {
-    var val = snapshot.val();
-    //if nobody claimed or already mine
-    if (val == null || Object.keys(val)[0] == who) {
-      admin.database().ref(`/users/${who}/phone/`).set(phone);
+  setPhoneOwner(phone, who, function(error){
+    if (error == null) {
       res.status(200).send({
-        result: `Successfully set phone '${phone}'.`, 
-        phone: phone
+          result: `Successfully set your phone to '${phone}'.`, 
+          phone: phone
       });
     } else {
-      const phoneNumberIsAlreadyClaimed = 403;
-      res.status(phoneNumberIsAlreadyClaimed).send({
-        error : { 
-          code : phoneNumberIsAlreadyClaimed,
-          message : `Somebody else has already claimed that phone number.`,
-          phone : phone
-        }
-      });
+      res.status(error.error.code).send(error);
     }
   });
 });

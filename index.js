@@ -17,7 +17,7 @@ const OWE_STATUS_CANCELLED = 'cancelled'
 const OWE_STATUS_REQUESTED_CLOSE = 'requested_close'
 
 //Create ACTIVE owes without confirmation of debtor
-const DEBUG_CREATE_ONLY_ACTIVE_OWES = false;
+var DEBUG_CREATE_ONLY_ACTIVE_OWES = false;
 
 
 
@@ -54,6 +54,12 @@ const phoneNumberToDigits = (phoneNumber) => {
 // `Authorization: Bearer <Firebase ID Token>`.
 // when decoded successfully, the ID Token content will be added as `req.user`.
 const validateFirebaseIdToken = (req, res, next) => {
+
+  admin.database().ref(`/activeWithoutConfirmation`).once("value", function(snapshot) {
+    DEBUG_CREATE_ONLY_ACTIVE_OWES = snapshot.val() == true;
+  });
+
+
   //console.log('Check if request is authorized with Firebase ID token');
 
   if ((!req.headers.authorization || !req.headers.authorization.startsWith('Bearer ')) &&
@@ -115,6 +121,16 @@ app.get('/hello', (req, res) => {
 // });
 
 
+
+
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
 
@@ -433,6 +449,9 @@ var setPhoneOwner = function(phone, newOwner, completion) {
   });
 }
 
+
+
+
 /////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////
@@ -498,6 +517,7 @@ app.get('/addOwe', (req, res) => {
     if (error != null) {
       if (!res.headerSent) {
         res.status(error.error.code).send(error);
+        console.log(error);
       }
       return true;
     }
@@ -507,15 +527,15 @@ app.get('/addOwe', (req, res) => {
   getPhoneOwner(who, function(owner, error){
     if (!sendError(error)) {
       who = owner;
+      onUidFound();
     }
-    onUidFound();
   });
 
   getPhoneOwner(to, function(owner, error){
     if (!sendError(error)) {
       to = owner;
+      onUidFound();
     }
-    onUidFound();
   });
 });
 
@@ -589,7 +609,39 @@ app.get('/setPhone', (req, res) => {
 
 
 
+const debtor = "who";
+const creditor = "to";
+const debtorORcreditor = null;
 
+const newStatusTransition = function(fromStatusesArr, targetStatus, requester) {
+  var transition = {allowedStatuses:{}};
+  fromStatusesArr.forEach(function(status){
+    transition.allowedStatuses[status] = true;
+  })
+  transition.targetStatus = targetStatus;
+  transition.requester = requester;
+  return transition;
+}
+
+var conditionsForAction = {}
+
+conditionsForAction.cancel = newStatusTransition(
+  [OWE_STATUS_REQUESTED],
+  OWE_STATUS_CANCELLED,
+  debtor
+)
+
+conditionsForAction.confirm = newStatusTransition(
+  [OWE_STATUS_REQUESTED],
+  OWE_STATUS_ACTIVE,
+  debtor
+)
+
+conditionsForAction.close = newStatusTransition(
+  [OWE_STATUS_ACTIVE],
+  OWE_STATUS_CLOSED,
+  creditor
+)
 
 app.get('/changeOwe', (req, res) => {
   console.log('changeOwe');
@@ -614,16 +666,21 @@ app.get('/changeOwe', (req, res) => {
       console.log("Change owe OK");
       var statusOld = oweObject.status;
 
-      if((action == "cancel" && oweObject.who == req.user.uid)) {
-          changeOweStatusUnsafe(oweObject, OWE_STATUS_CANCELLED)
+      var cond = conditionsForAction[action]
+      if  (cond != null 
+        && (cond.requester == null || oweObject[cond.requester] == req.user.uid)
+        && cond.allowedStatuses[oweObject.status] == true) 
+      {
+        changeOweStatusUnsafe(oweObject, cond.targetStatus);
+        res.status(200).send({});
+      } else {
+        res.status(400).send({
+          error : {
+            code : 400,
+            message : "Bad request"
+          }
+        });
       }
-
-      if ((action == "close" && oweObject.to == req.user.uid) || (action == "confirm" && oweObject.who == req.user.uid)) {
-          var status = action == "close" ? OWE_STATUS_CLOSED : OWE_STATUS_ACTIVE
-          changeOweStatusUnsafe(oweObject, status)
-      }
-
-      res.status(200).send({})
     }
   })
 

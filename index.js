@@ -285,6 +285,12 @@ var getOwesOfUser = function(who, status, completion, onlyIncludingUid) {
       var owesToGet = idsArray.length;
       var resArr = [];
 
+      if (owesToGet == 0)
+      {
+        completion(resArr, null);
+        return;
+      }
+
       var onOweAdded = function() {
         --owesToGet;
         if (owesToGet == 0) {
@@ -330,9 +336,15 @@ var getOwesOfUser = function(who, status, completion, onlyIncludingUid) {
 //var completion = function(owesWithPhones, error) { }
 //owesArray = [] in case of an error
 //error = null - json object, ready to send as response
-var replaceUidsWithPhonesInOwesArray = function(owes, completion) {
+var replaceUidsWithPhonesInOwesArray = function(owes, selfUid, completion) {
   var resultArray = []
   var counter = owes.length * 2;
+
+  if (counter == 0)
+  {
+    completion(owes, null);
+    return;
+  }
 
   var onReplace = function() {
     --counter;
@@ -342,8 +354,25 @@ var replaceUidsWithPhonesInOwesArray = function(owes, completion) {
   }
 
   owes.forEach(function(owe) {
-    getPhoneForUid(owe.who, function(phone) { owe.who = phone; onReplace(); });
-    getPhoneForUid(owe.to, function(phone) { owe.to = phone; onReplace(); });
+    if (owe.who == selfUid)
+    {
+      owe.who = 'self';
+      onReplace();
+    }
+    else
+    {
+      getPhoneForUid(owe.who, function(phone) { owe.who = phone; onReplace(); });
+    }
+
+    if (owe.to == selfUid)
+    {
+      owe.to = 'self';
+      onReplace();
+    }
+    else
+    {
+      getPhoneForUid(owe.to, function(phone) { owe.to = phone; onReplace(); });
+    }
   });
 }
 
@@ -353,7 +382,7 @@ var getPhoneForUid = function(who, completion) {
   admin.database().ref(`/users/${who}/`).once("value", function(snapshot) {
     const user = snapshot.val();
 
-    if (user == null || user.phone == null) {
+    if (user == null || user.phone == null || user.phone == '') {
       //userNotFound(who)
       completion("undefinedPhone");
     } else {
@@ -465,11 +494,18 @@ var setPhoneOwner = function(phone, newOwner, completion) {
 
 app.get('/addOwe', (req, res) => {
   console.log('addOwe');
+
+  console.log(req.query);
   
   // phone number
-  var who = phoneNumberToDigits(req.query.who);
+  var who = req.query.who ? phoneNumberToDigits(req.query.who) : null;
   // phone number
-  var to = phoneNumberToDigits(req.query.to);
+  var to = req.query.to ? phoneNumberToDigits(req.query.to) : null;
+
+
+  console.log(who);
+  console.log(to);
+
   const sum = req.query.sum;
   const descr = req.query.descr;
   var counter = 0;
@@ -524,23 +560,62 @@ app.get('/addOwe', (req, res) => {
     return false;
   }
 
-  getPhoneOwner(who, function(owner, error){
-    if (!sendError(error)) {
-      who = owner;
-      onUidFound();
-    }
-  });
+  if (typeof req.query.who == 'undefined' || req.query.who == 'self')
+  {
+    who = req.user.uid;
+    onUidFound();
+  }
+  else
+  {
+    getPhoneOwner(who, function(owner, error){
+      if (!sendError(error)) {
+        who = owner;
+        onUidFound();
+      }
+    });
+  }
 
-  getPhoneOwner(to, function(owner, error){
-    if (!sendError(error)) {
-      to = owner;
-      onUidFound();
-    }
-  });
+  if (typeof req.query.to == 'undefined' || req.query.to == 'self')
+  {
+    to = req.user.uid;
+    onUidFound();
+  }
+  else
+  {
+    getPhoneOwner(to, function(owner, error){
+      if (!sendError(error)) {
+        to = owner;
+        onUidFound();
+      }
+    });
+  }
 });
 
 
 
+
+
+
+
+
+app.get('/getOwes2', (req, res) => {
+  console.log('getOwes2');
+
+
+  // uid from provided auth token
+  var who = req.user.uid;
+  var status = req.query.status;
+
+  getOwesOfUser(who, status, function(owesArray, error) { 
+    if (error != null) {
+      res.status(error.error.code).send(error);
+    } else {
+      replaceUidsWithPhonesInOwesArray(owesArray, who, function(owesWithPhones, who, error){
+        res.status(200).send({result:owesWithPhones});
+      });
+    }
+  })
+});
 
 
 
@@ -560,13 +635,27 @@ app.get('/getOwes', (req, res) => {
     if (error != null) {
       res.status(error.error.code).send(error);
     } else {
-      replaceUidsWithPhonesInOwesArray(owesArray, function(owesWithPhones, error){
+      replaceUidsWithPhonesInOwesArray(owesArray, "don't replace my phone with 'self'", function(owesWithPhones, who, error){
         res.status(200).send(owesWithPhones);
       });
     }
   })
 });
 
+
+
+
+
+
+
+
+app.get('/getPhone', (req, res) => {
+  getPhoneForUid(req.user.uid, (phone) => {
+    res.status(200).send({
+      phone : phone.toString()
+    })
+  })
+});
 
 
 
@@ -593,6 +682,11 @@ app.get('/setPhone', (req, res) => {
 
   setPhoneOwner(phone, who, function(error){
     if (error == null) {
+
+      //get user/{$phone}/owes
+      //move its keys to user/{$who}/owes with checking status
+      //modify who to for owe
+
       res.status(200).send({
           result: `Successfully set your phone to '${phone}'.`, 
           phone: phone
@@ -628,7 +722,7 @@ var conditionsForAction = {}
 conditionsForAction.cancel = newStatusTransition(
   [OWE_STATUS_REQUESTED],
   OWE_STATUS_CANCELLED,
-  debtor
+  debtorORcreditor
 )
 
 conditionsForAction.confirm = newStatusTransition(
@@ -672,7 +766,7 @@ app.get('/changeOwe', (req, res) => {
         && cond.allowedStatuses[oweObject.status] == true) 
       {
         changeOweStatusUnsafe(oweObject, cond.targetStatus);
-        res.status(200).send({});
+        res.status(200).send({ result : 'ok' });
       } else {
         res.status(400).send({
           error : {

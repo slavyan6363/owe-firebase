@@ -439,7 +439,7 @@ var getPhoneOwner = function(phone, completion) {
       completion(null, {
         error : {
           code : phoneNotFoundErrorCode,
-          message : "Phone not found"
+          message : `Phone owner not found ${phone}`
         }
       });
     } else {

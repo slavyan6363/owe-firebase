@@ -46,7 +46,7 @@ const app = express();
 
 // '+7(922)016-55-27' -> '89220165527'
 const phoneNumberToDigits = (phoneNumber) => {
-  return phoneNumber.replace( /^\+7/, '8' ).replace( /[^\d\+]/g, '' )
+  return phoneNumber.replace( /[^\d]/g, '' ).replace( /^7/, '8' ).replace( /[^\d\+]/g, '' )
 }
 
 // Express middleware that validates Firebase ID Tokens passed in the Authorization HTTP header.
@@ -361,7 +361,11 @@ var replaceUidsWithPhonesInOwesArray = function(owes, selfUid, completion) {
     }
     else
     {
-      getPhoneForUid(owe.who, function(phone) { owe.who = phone; onReplace(); });
+      getPhoneForUid(owe.who, function(phone) { 
+        if (phone != 'undefinedPhone')
+          owe.who = phone; 
+        onReplace(); 
+      });
     }
 
     if (owe.to == selfUid)
@@ -371,7 +375,11 @@ var replaceUidsWithPhonesInOwesArray = function(owes, selfUid, completion) {
     }
     else
     {
-      getPhoneForUid(owe.to, function(phone) { owe.to = phone; onReplace(); });
+      getPhoneForUid(owe.to, function(phone) { 
+        if (phone != 'undefinedPhone')
+          owe.to = phone; 
+        onReplace(); 
+      });
     }
   });
 }
@@ -502,10 +510,6 @@ app.get('/addOwe', (req, res) => {
   // phone number
   var to = req.query.to ? phoneNumberToDigits(req.query.to) : null;
 
-
-  console.log(who);
-  console.log(to);
-
   const sum = req.query.sum;
   const descr = req.query.descr;
   var counter = 0;
@@ -550,6 +554,9 @@ app.get('/addOwe', (req, res) => {
   }
 
   var sendError = function(error) {
+    //ignore unexisting phones
+    return false;
+
     if (error != null) {
       if (!res.headerSent) {
         res.status(error.error.code).send(error);
@@ -569,7 +576,8 @@ app.get('/addOwe', (req, res) => {
   {
     getPhoneOwner(who, function(owner, error){
       if (!sendError(error)) {
-        who = owner;
+        if (owner != null)
+          who = owner;
         onUidFound();
       }
     });
@@ -584,7 +592,8 @@ app.get('/addOwe', (req, res) => {
   {
     getPhoneOwner(to, function(owner, error){
       if (!sendError(error)) {
-        to = owner;
+        if (owner != null)
+          to = owner;
         onUidFound();
       }
     });
@@ -683,9 +692,13 @@ app.get('/setPhone', (req, res) => {
   setPhoneOwner(phone, who, function(error){
     if (error == null) {
 
-      //get user/{$phone}/owes
+      //todo
+      //get user/${phone}/owes
       //move its keys to user/{$who}/owes with checking status
       //modify who to for owe
+
+      //ctrl+f -> uncomment -> //ignore unexisting phones
+      transferOwesOwnershipFromNumberToUser(who, phone, function(movedSomething){ });
 
       res.status(200).send({
           result: `Successfully set your phone to '${phone}'.`, 
@@ -698,7 +711,29 @@ app.get('/setPhone', (req, res) => {
 });
 
 
+var transferOwesOwnershipFromNumberToUser = function(who, phone, completion)
+{
+  admin.database().ref(`/users/${phone}/owes`).once("value", function(snapshot) {
+        const owes = snapshot.val();
+        console.log(`MOVING OWES '/users/${phone}/owes' to '/users/${who}/owes'`);
+        if (owes != null)
+        {
+          admin.database().ref(`/users/${phone}`).remove();
+          Object.keys(owes).forEach(function(status){
 
+            Object.keys(owes[status]).forEach(function(oweKey){
+
+              admin.database().ref(`/owes/${oweKey}`).once("value", function(snapshot) {
+                const owe = snapshot.val();
+                admin.database().ref(`/owes/${oweKey}/${ owe.who == phone ? 'who' : 'to' }`).set(who);
+                admin.database().ref(`/users/${who}/owes/${status}/${oweKey}`).set(true);
+              });
+            });
+          });
+        }
+        completion(owes != null);
+      });
+}
 
 
 
